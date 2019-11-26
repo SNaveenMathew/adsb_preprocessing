@@ -43,7 +43,7 @@ get_alt_change_df <- function(ac_data) {
   return(alt_change_df)
 }
 
-identify_flight_phase <- function(uniq_id, plot_phases = F, return_dataframe = T) {
+identify_flight_phase <- function(uniq_id, plot_phases = T, return_dataframe = T) {
   return_df <- data.frame()
   for(id1 in uniq_id) {
     tryCatch({
@@ -98,7 +98,7 @@ identify_flight_phase <- function(uniq_id, plot_phases = F, return_dataframe = T
       final_df$climb_rate <- fillna(final_df$climb_rate)
       if(plot_phases) {
         png(paste0("flight_phase/", id1, ".png"), width = 800, height = 600)
-        plot(final_df$ts_readable, final_df$altitude, col = final_df$climb_rate_sign + 4, cex = 0.5)
+        plot(final_df$ts_readable, final_df$altitude, col = final_df$climb_rate_sign + 4, cex = 0.5, xlab = "Time", ylab = "Altitude")
         points(final_df$ts_readable[final_df$decision_point], final_df$altitude[final_df$decision_point],
                col = "red", cex = 1, pch = 20)
         legend("topright", legend = unique(final_df$climb_rate_sign), fill = unique(final_df$climb_rate_sign) + 4)
@@ -112,19 +112,27 @@ identify_flight_phase <- function(uniq_id, plot_phases = F, return_dataframe = T
   return(return_df)
 }
 
+identify_flight_phase_plot <- function(uniq_id, return_dataframe = T) {
+  return(identify_flight_phase(uniq_id = uniq_id, plot_phases = T, return_dataframe = return_dataframe))
+}
 
 
 
-setwd("/Users/naveensathiyanathan/Desktop/Coding/Old/ATC_Analysis_2019_04_01/Flight_Phase_Identification/")
+
+# setwd("/Users/naveensathiyanathan/Desktop/Coding/Old/ATC_Analysis_2019_04_01/Flight_Phase_Identification/")
 # ac_data <- readRDS("high_ac_data.Rds")
-ac_data <- fread("../../../samples_with_jfk_landing_flag.csv")
+ac_data <- fread("../../../2019-05-24.csv", header = F)
+temp_dat <- fread("../../../samples_with_jfk_landing_flag.csv", nrows = 2)
+colnames(ac_data) <- colnames(temp_dat)
 setDT(ac_data)
 setorder(ac_data, id, ts)
-ac_data$ts_readable <- as.POSIXct.numeric(as.numeric(ac_data$ts), origin="1970-01-01")
+ac_data[, "ts_readable" := as.POSIXct.numeric(as.numeric(ts), origin="1970-01-01"), ]
+# ac_data$ts_readable <- as.POSIXct.numeric(as.numeric(ac_data$ts), origin="1970-01-01")
 
 alt_change_df <- get_alt_change_df(ac_data)
 alt_change_df$alt_change <- TRUE
 ac_data <- merge(ac_data, alt_change_df, all = T)
+ac_data <- ac_data[!is.na(ac_data$id), ]
 ac_data$alt_change[is.na(ac_data$alt_change)] <- F
 ac_data[, "total_alt_change" := cumsum(alt_change), by = "id"]
 ac_data[, "next_ts" := c(ts[-1], NA), by = "id"]
@@ -136,6 +144,15 @@ alt_change_df <- ac_data[ac_data$alt_change,
                            "altitude", "total_alt_change", "alt_duration"#,
                            #"climb_rate", "est_climb_rate"
                          )]
+alt_change_df <- alt_change_df[!is.na(alt_change_df$id), ]
+
+alt_change_df1 <- merge(alt_change_df, ac_data[, c("id", "ts", "lon", "lat", "altitude", "jfk_landing_flag")], by = c("id", "ts"))
+alt_change_df1 <- alt_change_df1[alt_change_df1$jfk_landing_flag, ]
+jfk_pos <- c(40.6413, -73.7781)
+alt_change_df1$distance_from_airport <- apply(alt_change_df1[, c("lon", "lat")], 1,
+                                              function(row)
+                                                geosphere::distm(row, rev(jfk_pos)))
+plot(alt_change_df1$distance_from_airport, alt_change_df1$altitude)
 
 # id1 <- "0C6015_0"
 cores <- detectCores() - 1
@@ -144,12 +161,12 @@ ac_data <- ac_data[, c("id", "ts_readable", "altitude")]
 clusterExport(cl, list("smooth.spline", "alt_change_df", "diff", "c", "sign", "merge", "abs", "fillna",
                        "data.frame", "cumsum", "%>%", "group_by", "summarize", "first", "last", "sum",
                        "expand_summary_df", "seq", "plot", "points", "legend", "dev.off", "tryCatch",
-                       "setDT", "which", "is.na", "ac_data"))
+                       "setDT", "which", "is.na", "ac_data", "identify_flight_phase"))
 uniq_id <- unique(alt_change_df$id)
 num <- ceiling(length(uniq_id)/cores)
 idx <- ceiling(1:length(uniq_id)/num)
 uniq_id_splits <- split(uniq_id, idx)
-out_df <- parLapply(cl = cl, X = uniq_id_splits, fun = identify_flight_phase)
+out_df <- parLapply(cl = cl, X = uniq_id_splits, fun = identify_flight_phase_plot)
 stopCluster(cl)
 out_df <- do.call(rbind, out_df)
 # print(nrow(out_df))
